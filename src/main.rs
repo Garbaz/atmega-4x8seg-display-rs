@@ -22,7 +22,7 @@ struct InterruptState {
 static mut INTERRUPT_STATE: Mutex<Option<InterruptState>> = Mutex::new(None);
 
 /// Safely access & mutate the interrupt state.
-/// 
+///
 /// Fair warning: I don't know if this actually is fully safe. But it works.
 fn mut_interrupt_state<F: FnOnce(&mut Option<InterruptState>)>(update: F) {
     interrupt::free(|_cs| unsafe {
@@ -37,6 +37,8 @@ fn main() -> ! {
 
     let mut serial = arduino_hal::default_serial!(dp, pins, 57600);
 
+    // Here we set up our 4x8 segment display. If we want to connect the display
+    // to different pins, this is where we'd change things.
     let display = Seg8x4 {
         sa: pins.d11.into_opendrain_high().downgrade(),
         sb: pins.d13.into_opendrain_high().downgrade(),
@@ -60,7 +62,10 @@ fn main() -> ! {
         });
     });
 
-    timer_setup(&dp.TC1, 4 * 60);
+    // We set up the timer such that each digit is shown 200 times per second.
+    // If the frequency is too high, the main loop doesn't have time to run. If
+    // its too low, the display will flicker.
+    timer_setup(&dp.TC1, 4 * 200);
 
     unsafe {
         interrupt::enable();
@@ -68,23 +73,27 @@ fn main() -> ! {
 
     uwriteln!(serial, "Give me some 4 digit numbers:").unwrap();
 
-    let mut buffer;
     loop {
-        buffer = [0; 32];
-        let bytes = serial.read_line(&mut buffer);
-
+        // Read a line from serial and convert it into a number, ignoring any
+        // non-digits in the input.
         let number = {
-            let mut number = 0;
+            let mut buffer = [0; 32];
+            let bytes = serial.read_line(&mut buffer);
+
             let mut factor = 1;
-            for b in bytes.iter().rev() {
-                if b.is_ascii_digit() {
-                    number += factor * ((b - b'0') as u16);
+            bytes
+                .iter()
+                .rev()
+                .filter(|b| b.is_ascii_digit())
+                .map(|b| {
+                    let r = factor * ((b - b'0') as u16);
                     factor *= 10;
-                }
-            }
-            number
+                    r
+                })
+                .sum()
         };
 
+        // Update the display to show the newly read number
         mut_interrupt_state(|is| {
             if let Some(is) = is {
                 is.display.set_number(number, 10);
@@ -95,10 +104,11 @@ fn main() -> ! {
 
 #[interrupt(atmega328p)]
 fn TIMER1_COMPA() {
+    // Upon each timer interrupt, we rotate through to the next digit to show.
     mut_interrupt_state(|is| {
         if let Some(is) = is {
-            is.display.show(is.digit);
             is.digit = is.digit.next();
+            is.display.show(is.digit);
         }
     });
 }

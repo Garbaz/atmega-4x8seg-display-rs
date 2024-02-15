@@ -1,9 +1,9 @@
 //! Two levels of abstraction for a common cathode 4x8 segment display
-//! 
+//!
 //! ## Usage
-//! 
+//!
 //! Create a four digit display
-//! 
+//!
 //! ```rs
 //! let display = Seg8x4 { ... }.into_four_digit_display();
 //! ```
@@ -91,18 +91,29 @@ impl From<u8> for Segment {
     }
 }
 
-/// Represents the raw 8x4 segment display. Usually you'd create this struct and
+/// Represents the raw 4x8 segment display. Usually you'd create this struct and
 /// then call `into_four_digit_display` to turn it into a convenient stateful
 /// four digit display (See [`FourDigitDisplay`]).
-/// 
+///
 /// `sa` to `sf` are the pins to which the cathodes of the seven segments are
 /// connected to.
 ///
-/// `sp` is the pin the cathode to which cathode of the decimal point is
-/// connected to.
-/// 
+/// `sp` is the pin to which cathode of the decimal point is connected to.
+///
 /// `d1` to `d4` are the pins to which the anodes of the four digits are
 /// connected to.
+/// 
+/// **Don't forget the resistors on the anode pins, or things will go _pop_!**
+///
+/// The cathode pins are in the "open drain" mode, such that we can toggle them
+/// between being pulled low or disconnected. This is very important, since if
+/// we were to pull a cathode pin high and an anode pin low, we would be
+/// applying a reverse voltage to the LED in the display, ergo it go _pop_. We
+/// don't want that!
+///
+/// The anode pins are set as normal outputs, such that we can toggle them
+/// between being pulled high and pulled low. We don't actually have to pull
+/// them low, but there is no "open source" mode.
 pub struct Seg8x4 {
     pub sa: Pin<OpenDrain>,
     pub sb: Pin<OpenDrain>,
@@ -208,9 +219,8 @@ impl Seg8x4 {
     }
 }
 
-
 /// A convenient stateful four digit display abstracting over [`Seg8x4`].
-/// 
+///
 /// The intended use is to set the number to be displayed with
 /// [`Self::set_number`] (say in the main loop of the program), and to rapidly
 /// rotate through calling for each digit `Self::show` (say in a timer ISR).
@@ -227,7 +237,7 @@ impl FourDigitDisplay {
     /// can be any `u16`, but only the lowest four digits will be displayed
     /// (obviously). But the base **has to be** less than or equal to 16, or the
     /// function will **panic**.
-    /// 
+    ///
     /// Usually you'd call this function from the main loop of your program.
     pub fn set_number(&mut self, number: u16, base: u8) {
         assert!(base <= 16);
@@ -242,7 +252,21 @@ impl FourDigitDisplay {
         self.state_d4 = NUM_TO_SEGMENTS[(number % base1) as usize];
     }
 
-    const fn state(&self, digit: Digit) -> [bool; 8] {
+    /// Enable the decimal point for a digit.
+    pub fn set_decimal_point(&mut self, digit: Digit) {
+        self.state_mut(digit)[7] = true;
+    }
+
+    fn state_mut(&mut self, digit: Digit) -> &mut [bool; 8] {
+        match digit {
+            Digit::D1 => &mut self.state_d1,
+            Digit::D2 => &mut self.state_d2,
+            Digit::D3 => &mut self.state_d3,
+            Digit::D4 => &mut self.state_d4,
+        }
+    }
+
+    fn state(&self, digit: Digit) -> [bool; 8] {
         match digit {
             Digit::D1 => self.state_d1,
             Digit::D2 => self.state_d2,
@@ -251,12 +275,12 @@ impl FourDigitDisplay {
         }
     }
 
-    /// Show the digit `digit` of the four digit display.
-    /// 
+    /// Show one digit of the four digit display.
+    ///
     /// Since we have a common cathode display, only one digit at a time can be
     /// shown. Therefore for all four digits to be visible, this function has to
     /// be called rapidly for each digit one after the other.
-    /// 
+    ///
     /// Usually you'd call this function from a timer ISR.
     pub fn show(&mut self, digit: Digit) {
         self.seg8x4.disable_all_digits();
